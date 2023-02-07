@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,9 +23,8 @@ type contextKey struct {
 
 // A stand-in for our database backed user object
 type UserInfo struct {
-	UserId int    `json:"user_id,omitempty"`
+	UserId int64  `json:"user_id,omitempty"`
 	Role   string `json:"role,omitempty"`
-	ApiKey string `json:"api_key,omitempty"`
 }
 
 type CustomClaims struct {
@@ -39,29 +40,40 @@ var userCtxKey = &contextKey{"user"}
 var ipCtxKey = &contextKey{"remote_ip"}
 
 // Middleware decodes the share session cookie and packs the session into context
-func Middleware(c *base.Client) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			saveIPContext(r)
-			var rr *http.Request = r
+func Middleware(c *base.Client, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 
-			if tokenString := strings.TrimSpace(r.Header.Get("Authorization")); tokenString != "" {
-				rr = checkAuthorizationForLogin(tokenString, c, w, r)
-			} else if cookie, err := r.Cookie("auth-cookie"); err == nil && c != nil && strings.TrimSpace(cookie.Value) != "" {
-				rr = checkCookieForLogin(cookie, w, r)
-			}
+		saveIPContext(w, r)
+		var rr *http.Request = r
 
-			if rr == nil {
-				return
-			}
-
-			if !CheckRateLimit(rr.Context(), c.RE, 1) {
-				http.Error(w, "Too many request, exceed rate limit", http.StatusTooManyRequests)
-				return
-			}
+		if tokenString := strings.TrimSpace(r.Header.Get("Authorization")); tokenString != "" {
+			rr = checkAuthorizationForLogin(tokenString, c, w, r)
+		} else if cookie, err := r.Cookie("auth-cookie"); err == nil && c != nil && strings.TrimSpace(cookie.Value) != "" {
+			rr = checkCookieForLogin(cookie, w, r)
+		}
+		if rr != nil {
 			next.ServeHTTP(w, rr)
-		})
+			refreshCookie(w, rr)
+		}
+
+	})
+}
+
+func refreshCookie(w http.ResponseWriter, r *http.Request) {
+	if userInfo := ForContext(r.Context()); userInfo != nil {
+		var newClaim CustomClaims
+		newClaim.UserInfo = *userInfo
+		if newTokenString, err := CreateOrRefreshToken(&newClaim); err == nil {
+			var cookie http.Cookie
+			cookie.Name = "auth-cookie"
+			cookie.Value = newTokenString
+			cookie.MaxAge = 60 * (JWT_VALID_MINS - 5)
+			http.SetCookie(w, &cookie)
+		} else {
+			log.Println("Refresh token failed: ", err)
+		}
 	}
+
 }
 
 func CreateOrRefreshToken(c *CustomClaims) (tokenString string, err error) {
@@ -73,18 +85,20 @@ func CreateOrRefreshToken(c *CustomClaims) (tokenString string, err error) {
 	return
 }
 
-func checkAuthorizationForLogin(tokenString string, c *base.Client, w http.ResponseWriter, r *http.Request) *http.Request {
-	tokenStrArr := strings.Split(tokenString, " ")
+func checkAuthorizationForLogin(apiTokenStr string, c *base.Client, w http.ResponseWriter, r *http.Request) *http.Request {
+	tokenStrArr := strings.Split(apiTokenStr, " ")
+
 	if len(tokenStrArr) > 1 {
-		tokenString = tokenStrArr[len(tokenStrArr)-1]
+		apiTokenStr = tokenStrArr[len(tokenStrArr)-1]
 	} else {
-		tokenString = tokenStrArr[0]
+		apiTokenStr = tokenStrArr[0]
 	}
-	if claims, err := extractClaims(tokenString); err == nil && claims.ApiKey != "" && claims.UserId != 0 {
-		if apiKey := getApiKeyFromRedis(r.Context(), c, claims.UserId); apiKey == claims.ApiKey {
-			return saveUserContext(claims, r)
-		}
+
+	userInfo := getUserInfoFromRedis(r.Context(), c, apiTokenStr)
+	if userInfo != nil && userInfo.UserId != 0 {
+		return saveUserContext(userInfo, r)
 	}
+
 	http.Error(w, "Invalid Authorization Token", http.StatusUnauthorized)
 	return nil
 }
@@ -92,7 +106,7 @@ func checkAuthorizationForLogin(tokenString string, c *base.Client, w http.Respo
 func checkCookieForLogin(cookie *http.Cookie, w http.ResponseWriter, r *http.Request) *http.Request {
 	tokenString := strings.TrimSpace(cookie.Value)
 	if claims, err := extractClaims(tokenString); err == nil && claims.UserId != 0 { // check jwt token
-		rr := saveUserContext(claims, r)
+		rr := saveUserContext(&claims.UserInfo, r)
 		if newTokenString, err := CreateOrRefreshToken(claims); err == nil {
 			cookie.Value = newTokenString
 			cookie.MaxAge = 60 * (JWT_VALID_MINS - 5)
@@ -106,16 +120,17 @@ func checkCookieForLogin(cookie *http.Cookie, w http.ResponseWriter, r *http.Req
 	return nil
 }
 
-func saveUserContext(claims *CustomClaims, r *http.Request) *http.Request {
-	if claims != nil {
-		ctx := context.WithValue(r.Context(), userCtxKey, &claims.UserInfo)
+func saveUserContext(userInfo *UserInfo, r *http.Request) *http.Request {
+	if userInfo != nil {
+		ctx := context.WithValue(r.Context(), userCtxKey, userInfo)
 		return r.WithContext(ctx)
 	}
 	return r
 }
 
-func saveIPContext(r *http.Request) *http.Request {
+func saveIPContext(w http.ResponseWriter, r *http.Request) *http.Request {
 	remoteIP := r.Header.Get(base.IP_HEADER_KEY)
+	w.Header().Set("z-client-ip", remoteIP)
 	ctx := context.WithValue(r.Context(), ipCtxKey, remoteIP)
 	return r.WithContext(ctx)
 }
@@ -149,27 +164,61 @@ func ForIpContext(ctx context.Context) string {
 	return raw
 }
 
-func getApiKeyFromRedis(ctx context.Context, c *base.Client, userId int64) string {
-	if apiKey, err := c.RE.HGet(ctx, "api_keys", fmt.Sprint(userId)).Result(); err == nil {
-		if user, err := model.QueryUser(c.DB, userId); err == nil {
-			c.RE.HSet(ctx, "api_keys", fmt.Sprint(userId), apiKey)
-			if user.APIKey != "" {
-				return apiKey
+func getUserInfoFromRedis(ctx context.Context, c *base.Client, apiToken string) *UserInfo {
+	userInfoMap, err := c.RE.HGetAll(ctx, "tokens:"+apiToken).Result()
+	var userInfo UserInfo
+	if err == nil && len(userInfoMap) > 0 {
+		userId, _ := strconv.Atoi(userInfoMap["user_id"])
+		if userId == 0 {
+			return nil
+		}
+
+		userInfo.UserId = int64(userId)
+		userInfo.Role = userInfoMap["role"]
+		ip := ForIpContext(ctx)
+		c.RE.HSet(ctx, "tokens:"+apiToken, "ip", ip, "access_time", time.Now())
+		return &userInfo
+	} else {
+		user, err := model.QueryUserByToken(c.DB, apiToken)
+		if err == nil {
+			err2 := c.RE.HSet(ctx, "tokens:"+apiToken, "user_id", user.ID, "role", user.Role).Err()
+			if err2 != nil {
+				log.Println("error: redis set")
+			}
+
+			userInfo.UserId = user.ID
+			userInfo.Role = user.Role
+			return &userInfo
+		} else {
+			err2 := c.RE.HSet(ctx, "tokens:"+apiToken, "user_id", 0).Err()
+			if err2 == nil {
+				_ = c.RE.Expire(ctx, "tokens:"+apiToken, 10*time.Minute).Err()
+			} else {
+				log.Println("error: redis set")
 			}
 		}
 	}
-	return ""
+	return nil
 }
 
-func ReplyUnauthorized(ctx context.Context) {
-
+func ReplyUnauthorized(w http.ResponseWriter) {
+	resp := make(map[string]interface{})
+	resp["code"] = fmt.Sprint(http.StatusUnauthorized)
+	resp["message"] = "Request Unauthorized, please use API token or login first."
+	w.Header().Set("Content-Type", "application/json")
+	respJson, _ := json.Marshal(resp)
+	w.WriteHeader(http.StatusUnauthorized)
+	w.Write(respJson)
 }
 
-func ReplyForbidden(ctx context.Context) {
-
-}
-
-func ReplyTooMany(ctx context.Context) {
+func ReplyTooMany(w http.ResponseWriter) {
+	resp := make(map[string]interface{})
+	resp["code"] = fmt.Sprint(http.StatusTooManyRequests)
+	resp["message"] = `Too Many Requests, your can slow down your access and wait for quota to recovery and use API "GET /rate_limite" to check your access quota,`
+	w.Header().Set("Content-Type", "application/json")
+	respJson, _ := json.Marshal(resp)
+	w.WriteHeader(http.StatusTooManyRequests)
+	w.Write(respJson)
 
 }
 

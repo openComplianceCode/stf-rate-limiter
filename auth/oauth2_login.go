@@ -10,9 +10,8 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/alec-z/osca/base"
-	"github.com/alec-z/osca/ent"
-	"github.com/alec-z/osca/ent/user"
+	"github.com/alec-z/rate_limiter/base"
+	"github.com/alec-z/rate_limiter/model"
 )
 
 type Oauth2 struct {
@@ -26,10 +25,10 @@ func (o *Oauth2) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var u *ent.User
+	var u *model.User
 
 	if ui := ForContext(r.Context()); ui != nil && r.URL.Query().Get("state") != "" {
-		u, _ = o.DB.User.Get(r.Context(), ui.UserId) // already login and refresh
+		u, _ = model.QueryUser(o.Client.DB, ui.UserId) // already login and refresh
 	}
 
 	code := r.URL.Query().Get("code")
@@ -52,20 +51,22 @@ func (o *Oauth2) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	//query and update object
 	if u == nil {
 		if o.T == "gitee" {
-			u, err = o.DB.User.Query().Where(user.GiteeIDEQ(userID)).Only(r.Context())
+			u, err = model.QueryUserByGiteeID(o.DB, userID)
 		} else if o.T == "github" {
-			u, err = o.DB.User.Query().Where(user.GithubIDEQ(userID)).Only(r.Context())
+			u, err = model.QueryUserByGithubID(o.DB, userID)
 		}
 	}
-
 	if err != nil {
-		creator := o.DB.User.Create()
-		setUserInfo(creator.Mutation(), o.T, uj)
-		u = creator.SaveX(r.Context())
+		var userMutation model.User
+		setUserInfo(&userMutation, o.T, uj)
+		u, err = model.CreateUser(o.DB, &userMutation)
 	} else {
-		updator := u.Update()
-		setUserInfo(updator.Mutation(), o.T, uj)
-		u = updator.SaveX(r.Context())
+		setUserInfo(u, o.T, uj)
+		u, err = model.UpdateUser(o.DB, u)
+	}
+	if err != nil {
+		log.Printf("create or update user info error", err)
+		return
 	}
 
 	//createJwt
@@ -82,19 +83,20 @@ func (o *Oauth2) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "Invalid oauth2 authorization", http.StatusUnauthorized)
 }
 
-func setUserInfo(m *ent.UserMutation, authType string, uj *userJson) {
+func setUserInfo(m *model.User, authType string, uj *userJson) {
+	sID := fmt.Sprint(uj.ID)
 	if authType == "gitee" {
-		m.SetGiteeID(fmt.Sprint(uj.ID))
-		m.SetGiteeEmail(uj.Email)
-		m.SetGiteeLogin(uj.Login)
-		m.SetGiteeAvatarURL(uj.AvatarURL)
-		m.SetGiteeName(uj.Name)
+		m.GiteeID = &sID
+		m.GiteeEmail = &uj.Email
+		m.GiteeLogin = &uj.Login
+		m.GiteeAvatarUrl = &uj.AvatarURL
+		m.GiteeName = &uj.Name
 	} else if authType == "github" {
-		m.SetGithubID(fmt.Sprint(uj.ID))
-		m.SetGithubEmail(uj.Email)
-		m.SetGithubLogin(uj.Login)
-		m.SetGithubAvatarURL(uj.AvatarURL)
-		m.SetGithubName(uj.Name)
+		m.GithubID = &sID
+		m.GithubEmail = &uj.Email
+		m.GithubLogin = &uj.Login
+		m.GithubAvatarUrl = &uj.AvatarURL
+		m.GithubName = &uj.Name
 	}
 }
 

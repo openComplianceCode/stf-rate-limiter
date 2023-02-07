@@ -1,11 +1,12 @@
 package base
 
 import (
-	"entgo.io/ent/examples/fs/ent"
+	"database/sql"
+
 	"github.com/go-redis/redis/v8"
 )
 
 type Client struct {
-	DB *ent.Client
+	DB *sql.DB
 	RE *redis.Client
 }

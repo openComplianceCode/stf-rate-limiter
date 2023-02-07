@@ -1,0 +1,9 @@
+paths:
+  - path: /api
+  - path: /api_test
+    pathType: Exact
+    consumption: 8
+  - path: /
+    pathType: Exact
+    consumption: 4
+    

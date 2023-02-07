@@ -8,5 +8,7 @@ require (
 	github.com/go-chi/chi/v5 v5.0.7 // indirect
 	github.com/go-redis/redis/v8 v8.11.5 // indirect
 	github.com/go-redis/redis_rate/v9 v9.1.2 // indirect
+	github.com/go-sql-driver/mysql v1.6.0 // indirect
 	github.com/golang-jwt/jwt/v4 v4.4.2 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

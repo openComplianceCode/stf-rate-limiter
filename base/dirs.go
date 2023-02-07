@@ -13,9 +13,4 @@ func init() {
 		panic(err)
 	}
 
-	err = os.Chdir(BASE_TMP_DIR)
-	if err != nil {
-		panic(err)
-	}
-
 }

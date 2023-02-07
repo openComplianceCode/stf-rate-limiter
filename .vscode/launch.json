@@ -4,5 +4,21 @@
     // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
+        {
+            "name": "Launch file",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${file}",
+            "env": {
+                "MYSQL_PASSWORD": "root",
+                "HMAC_SECRET": "zUjORDhpIRm7SUD36/yN99sX5rsjRD8c5FhrucHMJiJF2ukjA7w897WX1GN4UCKFiK5sxRvI/A7YRa6BEGEMX/+qvkE4rc9f3AZBr17youU=",
+                "GITEE_CLIENT_SECRET": "8d8a2a2b1edde983feeca792f8f4090768bad5f74d28729ef86a182e23d1fc5a",
+                "GITHUB_CLIENT_SECRET": "b136a353528610f8ee3d595fc24d7ea88e7df43b",
+                "https_proxy": "http://127.0.0.1:10801",
+                "http_proxy": "http://127.0.0.1:10801",
+                "all_proxy": "socks5://127.0.0.1:10800"
+              }
+        }
     ]
 }

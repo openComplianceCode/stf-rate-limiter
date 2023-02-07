@@ -6,46 +6,39 @@ import (
 	"log"
 	"time"
 
+	"github.com/alec-z/rate_limiter/base"
 	"github.com/go-redis/redis/v8"
 	"github.com/go-redis/redis_rate/v9"
 )
 
-var (
-	GeneralRL = map[string]int{
-		"nologin":  10000,
-		"everyone": 40000,
-		"gold":     160000,
-		"diamon":   640000,
-		"root":     10000000,
-	}
-)
-
-func CheckRateLimit(ctx context.Context, reClient *redis.Client, n int) bool {
+func CheckRateLimit(ctx context.Context, reClient *redis.Client, n int) (bool, int) {
 	remoteIP := ForIpContext(ctx)
 	userInfo := ForContext(ctx)
 	limiter := redis_rate.NewLimiter(reClient)
 	if userInfo == nil { // no login check IP
 		res, err := limiter.AllowN(ctx, "IP_RL:"+remoteIP, redis_rate.Limit{
-			Rate:   GeneralRL["nologin"],
-			Period: time.Hour,
-			Burst:  GeneralRL["nologin"] * 24,
+			Rate:   base.GeneralRL["nologin"].(int),
+			Period: time.Hour * 24,
+			Burst:  base.GeneralRL["nologin"].(int) * 24,
 		}, n)
 		if err != nil {
 			log.Println("limiter checking err: ", err)
-			return false
+			return false, res.Remaining
 		}
-		return res.Allowed >= n
+		log.Println("remoteIP : " + remoteIP + " consume :" + fmt.Sprint(n) + " Allow :" + fmt.Sprint(res.Allowed))
+		return res.Allowed >= n, res.Remaining
 	} else {
 		res, err := limiter.AllowN(ctx, "USER_RL:"+fmt.Sprint(userInfo.UserId), redis_rate.Limit{
-			Rate:   GeneralRL[userInfo.Role],
-			Period: time.Hour,
-			Burst:  GeneralRL[userInfo.Role] * 24,
+			Rate:   base.GeneralRL[userInfo.Role].(int),
+			Period: time.Hour * 24,
+			Burst:  base.GeneralRL[userInfo.Role].(int) * 24,
 		}, n)
 
 		if err != nil {
 			log.Println("limiter checking err: ", err)
-			return false
+			return false, res.Remaining
 		}
-		return res.Allowed >= n
+		log.Println("userID: " + fmt.Sprint(userInfo.UserId) + " consume :" + fmt.Sprint(n) + " Allow :" + fmt.Sprint(res.Allowed))
+		return res.Allowed >= n, res.Remaining
 	}
 }
