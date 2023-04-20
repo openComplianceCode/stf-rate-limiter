@@ -121,34 +121,38 @@ func updateUserDetailHandler(w http.ResponseWriter, r *http.Request) {
 	} else {
 		userDetail.ID = userInfo.UserId
 	}
-
+	errors := make([]string, 0, 5)
 	if userDetail.FirstName == nil || *userDetail.FirstName == "" {
-		http.Error(w, "Must have first name", http.StatusBadRequest)
-		return
+		errors = append(errors, "Must have first name")
+
 	}
 	if userDetail.LastName == nil || *userDetail.LastName == "" {
-		http.Error(w, "must have last name", http.StatusBadRequest)
-		return
+		errors = append(errors, "must have last name")
 	}
 	if userDetail.EmailAddress == nil || *userDetail.EmailAddress == "" {
-		http.Error(w, "must have email address", http.StatusBadRequest)
-		return
+		errors = append(errors, "must have email address")
 	}
 	if userDetail.City == nil || *userDetail.City == "" {
-		http.Error(w, "must have city", http.StatusBadRequest)
-		return
+		errors = append(errors, "must have city")
 	}
 	if userDetail.Country == nil || *userDetail.Country == "" {
-		http.Error(w, "must have country", http.StatusBadRequest)
-		return
+		errors = append(errors, "must have country")
+
 	}
 	if userDetail.PostalCode == nil || *userDetail.PostalCode == "" {
-		http.Error(w, "must have postal code", http.StatusBadRequest)
-		return
+		errors = append(errors, "must have postal code")
+
 	}
 
 	if userDetail.Address == nil || *userDetail.Address == "" {
-		http.Error(w, "must have address", http.StatusBadRequest)
+		errors = append(errors, "must have address")
+
+	}
+	if len(errors) > 0 {
+		res := map[string]interface{}{
+			"errors": errors,
+		}
+		util.ReplyJson(w, http.StatusOK, res)
 		return
 	}
 
